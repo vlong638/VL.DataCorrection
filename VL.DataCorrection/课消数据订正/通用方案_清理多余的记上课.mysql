@@ -1,0 +1,64 @@
+﻿select* from Org where EName ='nmgbsjy';#262146
+##############################问题详情排查 ###########################
+#账户详情
+set @StuFeeDocId = 42447597;
+#1.StuTeachingLog 上课记录
+select* from StuTeachingLog where StuDocId in (select Id from StuDoc where StuFeeDocId = @StuFeeDocId);
+#2.StuFeeDoc 总账户
+select* from StuFeeDoc where Id =@StuFeeDocId;
+#3.SubStuFeeDoc 子账户
+select ssfd.* from SubStuFeeDoc ssfd where ssfd.StuFeeDocId = @StuFeeDocId;
+-- select ft.TranOrderId, ft.FeetranLessonName, ft.RealAmount, ft.ActualIncome, ft.Arrearage, ft.Remain, ft.Count, ft.FeeStandardCount, ssfd.* from SubStuFeeDoc ssfd left join FeeTran ft on ssfd.FeeTranId = ft.Id where ssfd.StuFeeDocId in (@StuFeeDocId) order by ssfd.db_created_At desc;
+#4.SubStuFeeDocLog 子账户流水
+select ssfdl.* from SubStuFeeDocLog ssfdl where ssfdl.SubStuFeeDocId in (select Id from SubStuFeeDoc where ssfdl.StuFeeDocId in (@StuFeeDocId)) order by ssfdl.SourceId desc;
+#5.SubStuFeeDocOver 消超
+select* from SubStuFeeDocOver where StuFeeDocId =@StuFeeDocId;
+#6.哪些上课记录未产生课消
+select* from StuTeachingLog where StuDocId in (select Id from StuDoc where StuFeeDocId = @StuFeeDocId)
+and Id not in (select ssfdl.SourceId from SubStuFeeDocLog ssfdl where ssfdl.SubStuFeeDocId in (select Id from SubStuFeeDoc where ssfdl.StuFeeDocId in (@StuFeeDocId)))
+and ClassTimes !=0;
+#7.哪些流水是多余的
+select ssfdl.* from SubStuFeeDocLog ssfdl where ssfdl.SubStuFeeDocId in (select Id from SubStuFeeDoc where ssfdl.StuFeeDocId in (@StuFeeDocId))
+and ssfdl.SourceId not in (select Id from StuTeachingLog where StuDocId in (select Id from StuDoc where StuFeeDocId = @StuFeeDocId))
+and ssfdl.SourceType =7;
+
+
+##############订正方案
+#删除多余的流水
+set @SubStuFeeDocLogId = 218965811;
+delete from SubStuFeeDocLog where Id = @SubStuFeeDocLogId;
+#刷新子账户
+set @StuFeeDocId = 42825861;
+call proc_RefreshStuFeeDocByLogs(@StuFeeDocId);
+
+
+##############################校验###########################
+set @OrgId = 4158;
+select sfd.Id StuFeeDocId, sfd.OrgId, sfd.TotalClassTimes, sfd.TotalTuition, sfd.UsedClassTimes, ssfdo.RealOverClassTime, stld.RealClassTimes, sfd.UsedTuition, stld.RealCost
+from stufeedoc sfd
+inner join
+(
+    select sd.OrgId, sd.StuFeeDocId, sum(stl.Cost) RealCost, sum(stl.ClassTimes) RealClassTimes from stuteachinglog stl
+    inner join neworg ng on ng.OrgId= stl.OrgId  AND ng.Version= 'v10.2'
+
+    inner join studoc sd on sd.OrgId = stl.OrgId and sd.Id = stl.StuDocId
+
+    and sd.OrgId = @OrgId
+
+    group by sd.OrgId, sd.StuFeeDocId
+) stld on stld.OrgId = sfd.OrgId and stld.StuFeeDocId = sfd.Id
+left join
+(
+    select substufeedocover.OrgId, StuFeeDocId, sum(OverClassTime - PaidClassTime) RealOverClassTime
+      from substufeedocover
+      inner join neworg ng on ng.OrgId=substufeedocover.OrgId AND ng.Version='v10.2' 
+	and ng.OrgId = @OrgId
+    group by OrgId, StuFeeDocId
+) ssfdo on ssfdo.OrgId = sfd.OrgId and ssfdo.StuFeeDocId = sfd.Id
+where sfd.`Status`=1 AND sfd.`Mode` in (1,3)
+and sfd.OrgId = @OrgId
+and (sfd.UsedClassTimes<> stld.RealClassTimes
+or (sfd.UsedClassTimes + ifnull(ssfdo.RealOverClassTime,0)) <> stld.RealClassTimes
+)
+order by sfd.Id asc
+

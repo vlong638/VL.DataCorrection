@@ -4,4 +4,12 @@
     <TargetFramework>netstandard2.0</TargetFramework>
   </PropertyGroup>
 
+  <ItemGroup>
+    <None Remove="Class1.sql" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="课消数据订正\通用方案_清理多余的记上课.mysql" />
+  </ItemGroup>
+
 </Project>
